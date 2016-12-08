@@ -2036,6 +2036,49 @@ OMX_ERRORTYPE  omx_video::get_config(OMX_IN OMX_HANDLETYPE      hComp,
                 }
                 break;
             }
+       case OMX_QTIIndexConfigDescribeColorAspects:
+            {
+                VALIDATE_OMX_PARAM_DATA(configData, DescribeColorAspectsParams);
+                DescribeColorAspectsParams* pParam =
+                    reinterpret_cast<DescribeColorAspectsParams*>(configData);
+                DEBUG_PRINT_LOW("get_config: OMX_QTIIndexConfigDescribeColorAspects");
+                if (pParam->bRequestingDataSpace) {
+                    DEBUG_PRINT_ERROR("Does not handle dataspace request");
+                    return OMX_ErrorUnsupportedSetting;
+                }
+                if (pParam->bDataSpaceChanged == OMX_TRUE) {
+
+                    print_debug_color_aspects(&(pParam->sAspects), "get_config (dataspace changed) Client says");
+                    // If the dataspace says RGB, recommend 601-limited;
+                    // since that is the destination colorspace that C2D or Venus will convert to.
+                    if (pParam->nPixelFormat == HAL_PIXEL_FORMAT_RGBA_8888) {
+                        DEBUG_PRINT_INFO("get_config (dataspace changed): ColorSpace: Recommend 601-limited for RGBA8888");
+                        pParam->sAspects.mPrimaries = ColorAspects::PrimariesBT601_6_625;
+                        pParam->sAspects.mRange = ColorAspects::RangeLimited;
+                        pParam->sAspects.mTransfer = ColorAspects::TransferSMPTE170M;
+                        pParam->sAspects.mMatrixCoeffs = ColorAspects::MatrixBT601_6;
+                    } else {
+                        // For IMPLEMENTATION_DEFINED (or anything else), stick to client's defaults.
+                        DEBUG_PRINT_INFO("get_config (dataspace changed): ColorSpace: use client-default for format=%x",
+                                pParam->nPixelFormat);
+                    }
+                    print_debug_color_aspects(&(pParam->sAspects), "get_config (dataspace changed) recommended");
+                } else {
+                    memcpy(pParam, &m_sConfigColorAspects, sizeof(m_sConfigColorAspects));
+                    print_debug_color_aspects(&(pParam->sAspects), "get_config");
+                }
+                break;
+            }
+#ifdef SUPPORT_CONFIG_INTRA_REFRESH
+       case OMX_IndexConfigAndroidIntraRefresh:
+           {
+               OMX_VIDEO_CONFIG_ANDROID_INTRAREFRESHTYPE* pParam =
+                   reinterpret_cast<OMX_VIDEO_CONFIG_ANDROID_INTRAREFRESHTYPE*>(configData);
+               DEBUG_PRINT_LOW("get_config: OMX_IndexConfigAndroidIntraRefresh");
+               memcpy(pParam, &m_sConfigIntraRefresh, sizeof(m_sConfigIntraRefresh));
+               break;
+           }
+#endif
         default:
             DEBUG_PRINT_ERROR("ERROR: unsupported index %d", (int) configIndex);
             return OMX_ErrorUnsupportedIndex;
@@ -2084,6 +2127,11 @@ OMX_ERRORTYPE  omx_video::get_extension_index(OMX_IN OMX_HANDLETYPE      hComp,
     if (!strncmp(paramName, "OMX.google.android.index.prependSPSPPSToIDRFrames",
             sizeof("OMX.google.android.index.prependSPSPPSToIDRFrames") - 1)) {
         *indexType = (OMX_INDEXTYPE)OMX_QcomIndexParamSequenceHeaderWithIDR;
+        return OMX_ErrorNone;
+    }
+    if (!strncmp(paramName, "OMX.google.android.index.describeColorAspects",
+            sizeof(OMX_QTI_INDEX_CONFIG_COLOR_ASPECTS) - 1)) {
+        *indexType = (OMX_INDEXTYPE)OMX_QTIIndexConfigDescribeColorAspects;
         return OMX_ErrorNone;
     }
     return OMX_ErrorNotImplemented;
@@ -3030,6 +3078,7 @@ OMX_ERRORTYPE  omx_video::allocate_output_buffer(
             m_pOutput_pmem[i].offset = 0;
 
             m_pOutput_pmem[i].buffer = NULL;
+
             *bufferHdr = (m_out_mem_ptr + i );
 
             if(!secure_session) {
@@ -3056,6 +3105,7 @@ OMX_ERRORTYPE  omx_video::allocate_output_buffer(
                 //This should only be used for passing reference to source type and
                 //secure handle fd struct native_handle_t*
                 native_handle_t *handle = native_handle_create(1, 3); //fd, offset, size, alloc length
+                (*bufferHdr)->nAllocLen = sizeof(OMX_U32) + sizeof(native_handle_t*);
                 if (!handle) {
                     DEBUG_PRINT_ERROR("ERROR: native handle creation failed");
                     return OMX_ErrorInsufficientResources;
@@ -3224,17 +3274,15 @@ OMX_ERRORTYPE  omx_video::free_buffer(OMX_IN OMX_HANDLETYPE         hComp,
             m_sInPortDef.bPopulated = OMX_FALSE;
 
             /*Free the Buffer Header*/
-            if (release_input_done()
-#ifdef _ANDROID_ICS_
-                    && !meta_mode_enable
-#endif
-               ) {
+            if (release_input_done()) {
                 input_use_buffer = false;
-                if (m_inp_mem_ptr) {
+                // "m_inp_mem_ptr" may point to "meta_buffer_hdr" in some modes,
+                // in which case, it was not explicitly allocated
+                if (m_inp_mem_ptr && m_inp_mem_ptr != meta_buffer_hdr) {
                     DEBUG_PRINT_LOW("Freeing m_inp_mem_ptr");
                     free (m_inp_mem_ptr);
-                    m_inp_mem_ptr = NULL;
                 }
+                m_inp_mem_ptr = NULL;
                 if (m_pInput_pmem) {
                     DEBUG_PRINT_LOW("Freeing m_pInput_pmem");
                     free(m_pInput_pmem);
@@ -3437,6 +3485,10 @@ OMX_ERRORTYPE  omx_video::empty_this_buffer_proxy(OMX_IN OMX_HANDLETYPE  hComp,
             return OMX_ErrorBadParameter;
         }
         media_buffer = (LEGACY_CAM_METADATA_TYPE *)meta_buffer_hdr[nBufIndex].pBuffer;
+        if (media_buffer == NULL) {
+             DEBUG_PRINT_ERROR("ERROR: ETBProxy: meta buffer is NULL buffer[%p]", media_buffer);
+             return OMX_ErrorBadParameter;
+        }
         if ((media_buffer->buffer_type == LEGACY_CAM_SOURCE)
                 && buffer->nAllocLen != sizeof(LEGACY_CAM_METADATA_TYPE)) {
             DEBUG_PRINT_ERROR("Invalid metadata size expected(%u) v/s recieved(%zu)",
@@ -4617,6 +4669,10 @@ bool omx_video::omx_c2d_conv::get_buffer_size(int port,unsigned int &buf_size)
     }
     return ret;
 }
+void omx_video::print_debug_color_aspects(ColorAspects *aspects, const char *prefix) {
+    DEBUG_PRINT_HIGH("%s : Color aspects : Primaries = %d Range = %d Transfer = %d MatrixCoeffs = %d",
+            prefix, aspects->mPrimaries, aspects->mRange, aspects->mTransfer, aspects->mMatrixCoeffs);
+}
 
 OMX_ERRORTYPE  omx_video::empty_this_buffer_opaque(OMX_IN OMX_HANDLETYPE hComp,
         OMX_IN OMX_BUFFERHEADERTYPE* buffer)
@@ -4639,6 +4695,10 @@ OMX_ERRORTYPE  omx_video::empty_this_buffer_opaque(OMX_IN OMX_HANDLETYPE hComp,
     }
 
     media_buffer = (VideoGrallocMetadata *)buffer->pBuffer;
+    if (media_buffer == NULL) {
+         DEBUG_PRINT_ERROR("ERROR: empty_this_buffer_opaque: gralloc buffer is NULL buffer[%p]", media_buffer);
+         return OMX_ErrorBadParameter;
+    }
     if ((media_buffer->eType == LEGACY_CAM_SOURCE)
             && buffer->nAllocLen != sizeof(LEGACY_CAM_METADATA_TYPE)) {
         DEBUG_PRINT_ERROR("Invalid metadata size expected(%u) v/s recieved(%zu)",
@@ -4667,7 +4727,7 @@ OMX_ERRORTYPE  omx_video::empty_this_buffer_opaque(OMX_IN OMX_HANDLETYPE hComp,
     /*Enable following code once private handle color format is
       updated correctly*/
 
-    if (buffer->nFilledLen > 0) {
+    if (buffer->nFilledLen > 0 && handle) {
         if (c2d_opened && handle->format != c2d_conv.get_src_format()) {
             c2d_conv.close();
             c2d_opened = false;
