@@ -435,6 +435,7 @@ OMX_ERRORTYPE omx_venc::component_init(OMX_STRING role)
                 &m_sOutPortDef.nBufferSize,
                 m_sOutPortDef.nPortIndex) != true) {
         eRet = OMX_ErrorUndefined;
+        goto init_error;
     }
 
     // Initialize the video color format for input port
@@ -580,31 +581,43 @@ OMX_ERRORTYPE omx_venc::component_init(OMX_STRING role)
         if (pipe(fds)) {
             DEBUG_PRINT_ERROR("ERROR: pipe creation failed");
             eRet = OMX_ErrorInsufficientResources;
+            goto init_error;
         } else {
             if (fds[0] == 0 || fds[1] == 0) {
                 if (pipe(fds)) {
                     DEBUG_PRINT_ERROR("ERROR: pipe creation failed");
                     eRet = OMX_ErrorInsufficientResources;
+                    goto init_error;
                 }
             }
             if (eRet == OMX_ErrorNone) {
                 m_pipe_in = fds[0];
                 m_pipe_out = fds[1];
+
+                msg_thread_created = true;
+                r = pthread_create(&msg_thread_id,0, message_thread_enc, this);
+                if (r < 0) {
+                    DEBUG_PRINT_ERROR("ERROR: message_thread_enc thread creation failed");
+                    eRet = OMX_ErrorInsufficientResources;
+                    msg_thread_created = false;
+                    goto init_error;
+                } else {
+                    async_thread_created = true;
+                    r = pthread_create(&async_thread_id,0, venc_dev::async_venc_message_thread, this);
+                    if (r < 0) {
+                        DEBUG_PRINT_ERROR("ERROR: venc_dev::async_venc_message_thread thread creation failed");
+                        eRet = OMX_ErrorInsufficientResources;
+                        async_thread_created = false;
+
+                        msg_thread_stop = true;
+                        pthread_join(msg_thread_id,NULL);
+                        msg_thread_created = false;
+
+                        goto init_error;
+                    } else
+                        dev_set_message_thread_id(async_thread_id);
+                }
             }
-        }
-        msg_thread_created = true;
-        r = pthread_create(&msg_thread_id,0, message_thread_enc, this);
-        if (r < 0) {
-            eRet = OMX_ErrorInsufficientResources;
-            msg_thread_created = false;
-        } else {
-            async_thread_created = true;
-            r = pthread_create(&async_thread_id,0, venc_dev::async_venc_message_thread, this);
-            if (r < 0) {
-                eRet = OMX_ErrorInsufficientResources;
-                async_thread_created = false;
-            } else
-                dev_set_message_thread_id(async_thread_id);
         }
     }
 
@@ -2640,10 +2653,17 @@ int omx_venc::async_message_process (void *context, void* message)
                     OMX_COMPONENT_GENERATE_EBD);
             break;
         case VEN_MSG_OUTPUT_BUFFER_DONE:
+        {
             omxhdr = (OMX_BUFFERHEADERTYPE*)m_sVenc_msg->buf.clientdata;
+            OMX_U32 bufIndex = (OMX_U32)(omxhdr - omx->m_out_mem_ptr);
 
             if ( (omxhdr != NULL) &&
-                    ((OMX_U32)(omxhdr - omx->m_out_mem_ptr)  < omx->m_sOutPortDef.nBufferCountActual)) {
+                    (bufIndex  < omx->m_sOutPortDef.nBufferCountActual)) {
+                auto_lock l(omx->m_buf_lock);
+                if (BITMASK_ABSENT(&(omx->m_out_bm_count), bufIndex)) {
+                    DEBUG_PRINT_ERROR("Recieved FBD for buffer that is already freed !");
+                    break;
+                }
                 if (!omx->is_secure_session() && (m_sVenc_msg->buf.len <=  omxhdr->nAllocLen)) {
                     omxhdr->nFilledLen = m_sVenc_msg->buf.len;
                     omxhdr->nOffset = m_sVenc_msg->buf.offset;
@@ -2686,6 +2706,7 @@ int omx_venc::async_message_process (void *context, void* message)
             omx->post_event ((unsigned long)omxhdr,m_sVenc_msg->statuscode,
                     OMX_COMPONENT_GENERATE_FBD);
             break;
+        }
         case VEN_MSG_NEED_OUTPUT_BUFFER:
             //TBD what action needs to be done here??
             break;
