@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------------
-Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
@@ -32,6 +32,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "OMX_Types.h"
 #include "OMX_Core.h"
 #include "OMX_VideoExt.h"
+#include "QComOMXMetadata.h"
 #include "OMX_QCOMExtns.h"
 #include "qc_omx_component.h"
 
@@ -44,6 +45,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <linux/videodev2.h>
 #include <media/msm_vidc.h>
 #include <poll.h>
+#include <list>
 
 #define TIMEOUT 5*60*1000
 #define BIT(num) (1 << (num))
@@ -356,6 +358,7 @@ class venc_dev
         bool venc_h264_transform_8x8(OMX_BOOL enable);
         bool venc_get_profile_level(OMX_U32 *eProfile,OMX_U32 *eLevel);
         bool venc_get_seq_hdr(void *, unsigned, unsigned *);
+        bool venc_get_dimensions(OMX_U32 portIndex, OMX_U32 *w, OMX_U32 *h);
         bool venc_loaded_start(void);
         bool venc_loaded_stop(void);
         bool venc_loaded_start_done(void);
@@ -368,11 +371,13 @@ class venc_dev
         bool venc_get_vqzip_sei_info(OMX_U32 *enabled);
         bool venc_get_peak_bitrate(OMX_U32 *peakbitrate);
         bool venc_get_batch_size(OMX_U32 *size);
+        bool venc_get_pq_status(OMX_BOOL *pq_status);
         bool venc_get_temporal_layer_caps(OMX_U32 * /*nMaxLayers*/,
                 OMX_U32 * /*nMaxBLayers*/);
         bool venc_get_output_log_flag();
         bool venc_check_valid_config();
-        int venc_output_log_buffers(const char *buffer_addr, int buffer_len);
+        int venc_output_log_buffers(const char *buffer_addr, int buffer_len,
+                        uint64_t timestamp);
         int venc_input_log_buffers(OMX_BUFFERHEADERTYPE *buffer, int fd, int plane_offset,
                         unsigned long inputformat);
         int venc_extradata_log_buffers(char *buffer_addr);
@@ -417,7 +422,7 @@ class venc_dev
                 bool init(unsigned long);
                 void deinit();
                 void get_caps();
-                int configure();
+                int configure(unsigned long width, unsigned long height);
                 bool is_pq_handle_valid();
                 bool is_color_format_supported(unsigned long);
                 bool reinit(unsigned long);
@@ -442,6 +447,8 @@ class venc_dev
                 unsigned long configured_format;
         };
         venc_dev_pq m_pq;
+        bool venc_check_for_pq(void);
+        void venc_configure_pq(void);
         void venc_try_enable_pq(void);
 #endif
         struct venc_debug_cap m_debug;
@@ -471,7 +478,7 @@ class venc_dev
         bool async_thread_created;
         bool async_thread_force_stop;
         class omx_venc *venc_handle;
-        OMX_ERRORTYPE allocate_extradata(struct extradata_buffer_info *extradata_info);
+        OMX_ERRORTYPE allocate_extradata(struct extradata_buffer_info *extradata_info, int flags);
         void free_extradata_all();
         void free_extradata(struct extradata_buffer_info *extradata_info);
         int append_mbi_extradata(void *, struct msm_vidc_extradata_header*);
@@ -524,6 +531,7 @@ class venc_dev
         struct msm_venc_hybrid_hp           hybrid_hp;
         struct msm_venc_color_space         color_space;
         msm_venc_temporal_layers            temporal_layers_config;
+        bool m_hypervisor;
 
         bool venc_set_profile_level(OMX_U32 eProfile,OMX_U32 eLevel);
         bool venc_set_intra_period(OMX_U32 nPFrames, OMX_U32 nBFrames);
@@ -583,8 +591,9 @@ class venc_dev
         bool venc_set_roi_qp_info(OMX_QTI_VIDEO_CONFIG_ROIINFO *roiInfo);
         bool venc_set_blur_resolution(OMX_QTI_VIDEO_CONFIG_BLURINFO *blurInfo);
         bool venc_set_colorspace(OMX_U32 primaries, OMX_U32 range, OMX_U32 transfer_chars, OMX_U32 matrix_coeffs);
-        OMX_ERRORTYPE venc_set_temporal_layers(OMX_VIDEO_PARAM_ANDROID_TEMPORALLAYERINGTYPE *pTemporalParams);
+        OMX_ERRORTYPE venc_set_temporal_layers(OMX_VIDEO_PARAM_ANDROID_TEMPORALLAYERINGTYPE *pTemporalParams, bool istemporalConfig = false);
         OMX_ERRORTYPE venc_set_temporal_layers_internal();
+        bool venc_set_iframesize_type(QOMX_VIDEO_IFRAMESIZE_TYPE type);
 
 #ifdef MAX_RES_1080P
         OMX_U32 pmem_free();
@@ -616,11 +625,15 @@ class venc_dev
         bool is_thulium_v1;
         bool camera_mode_enabled;
         OMX_BOOL low_latency_mode;
-        struct {
+        struct roidata {
             bool dirty;
+            OMX_TICKS timestamp;
             OMX_QTI_VIDEO_CONFIG_ROIINFO info;
-        } roi;
-
+        };
+        bool m_roi_enabled;
+        pthread_mutex_t m_roilock;
+        std::list<roidata> m_roilist;
+        void get_roi_for_timestamp(struct roidata &roi, OMX_TICKS timestamp);
         bool venc_empty_batch (OMX_BUFFERHEADERTYPE *buf, unsigned index);
         static const int kMaxBuffersInBatch = 16;
         unsigned int mBatchSize;
@@ -641,18 +654,9 @@ class venc_dev
             int mBufMap[64];  // Map with slots for each buffer
             size_t mNumPending;
 
-          public:
-            // utility methods to parse entities in batch
-            // payload format for batch of 3
-            //| fd0 | fd1 | fd2 | off0 | off1 | off2 | len0 | len1 | len2 | csc0 | csc1 | csc2 | dTS0 | dTS1 | dTS2|
-            static inline int getFdAt(native_handle_t *, int index);
-            static inline int getOffsetAt(native_handle_t *, int index);
-            static inline int getSizeAt(native_handle_t *, int index);
-            static inline int getUsageAt(native_handle_t *, int index);
-            static inline int getColorFormatAt(native_handle_t *, int index);
-            static inline int getTimeStampAt(native_handle_t *, int index);
         };
         BatchInfo mBatchInfo;
+        bool mUseAVTimerTimestamps;
 };
 
 enum instance_state {

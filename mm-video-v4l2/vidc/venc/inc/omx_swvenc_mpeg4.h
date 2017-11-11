@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------------
-Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
+Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
@@ -74,11 +74,12 @@ class omx_venc: public omx_video
         swvenc_video_capability m_capability;
         bool m_max_allowed_bitrate_check;
         bool m_stopped;
-        bool format_set;
+        bool set_format;
 
         int dev_handle_output_extradata(void *, int);
         int dev_handle_input_extradata(void *, int, int);
         bool dev_buffer_ready_to_queue(OMX_BUFFERHEADERTYPE *buffer);
+        bool dev_get_dimensions(OMX_U32 ,OMX_U32 *,OMX_U32 *);
         void dev_set_extradata_cookie(void *);
         int dev_set_format(int);
 
@@ -137,11 +138,14 @@ class omx_venc: public omx_video
                     OMX_U32 * /*nMaxBLayers*/) {
             return false;
         }
+        bool dev_get_pq_status(OMX_BOOL *) {
+            return false;
+        }
         bool dev_is_video_session_supported(OMX_U32 width, OMX_U32 height);
         bool dev_color_align(OMX_BUFFERHEADERTYPE *buffer, OMX_U32 width,
                         OMX_U32 height);
         bool dev_get_output_log_flag();
-        int dev_output_log_buffers(const char *buffer_addr, int buffer_len);
+        int dev_output_log_buffers(const char *buffer_addr, int buffer_len, uint64_t timestamp);
         int dev_extradata_log_buffers(char *buffer);
         bool swvenc_color_align(OMX_BUFFERHEADERTYPE *buffer, OMX_U32 width,
                                 OMX_U32 height);

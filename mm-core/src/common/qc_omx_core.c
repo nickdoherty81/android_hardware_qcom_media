@@ -1,5 +1,5 @@
 /*--------------------------------------------------------------------------
-Copyright (c) 2009, 2015, The Linux Foundation. All rights reserved.
+Copyright (c) 2009, 2015, 2017 The Linux Foundation. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -463,7 +463,7 @@ OMX_GetHandle(OMX_OUT OMX_HANDLETYPE*     handle,
 
       // Load VPP omx component for decoder if vpp
       // property is enabled
-      if ((property_get("media.vpp.enable", value, NULL))
+      if ((property_get("vendor.media.vpp.enable", value, NULL))
            && (!strcmp("1", value) || !strcmp("true", value))) {
         DEBUG_PRINT("VPP property is enabled");
         if (!strcmp(core[cmp_index].so_lib_name, "libOmxVdec.so")) {
@@ -488,6 +488,7 @@ OMX_GetHandle(OMX_OUT OMX_HANDLETYPE*     handle,
         //Do not allow more than MAX limit for DSP audio decoders
         if((!strcmp(core[cmp_index].so_lib_name,"libOmxWmaDec.so")  ||
             !strcmp(core[cmp_index].so_lib_name,"libOmxAacDec.so")  ||
+            !strcmp(core[cmp_index].so_lib_name,"libOmxG711Dec.so")  ||
             !strcmp(core[cmp_index].so_lib_name,"libOmxAlacDec.so") ||
             !strcmp(core[cmp_index].so_lib_name,"libOmxApeDec.so")) &&
             (number_of_adec_nt_session+1 > MAX_AUDIO_NT_SESSION)) {
@@ -534,6 +535,7 @@ OMX_GetHandle(OMX_OUT OMX_HANDLETYPE*     handle,
           DEBUG_PRINT("Component %p Successfully created\n",*handle);
           if(!strcmp(core[cmp_index].so_lib_name,"libOmxWmaDec.so")  ||
              !strcmp(core[cmp_index].so_lib_name,"libOmxAacDec.so")  ||
+             !strcmp(core[cmp_index].so_lib_name,"libOmxG711Dec.so")  ||
              !strcmp(core[cmp_index].so_lib_name,"libOmxAlacDec.so") ||
              !strcmp(core[cmp_index].so_lib_name,"libOmxApeDec.so")) {
 
@@ -705,7 +707,7 @@ OMX_ComponentNameEnum(OMX_OUT OMX_STRING componentName,
   DEBUG_PRINT("OMXCORE API - OMX_ComponentNameEnum %p %d %d\n", componentName
                                                               ,(unsigned)nameLen
                                                               ,(unsigned)index);
-  if(index < SIZE_OF_CORE)
+  if((index < SIZE_OF_CORE) && strncmp(core[index].name, "OMX.QCOM.CUST.COMP.START",strlen("OMX.QCOM.CUST.COMP.START")))
   {
     #ifdef _ANDROID_
     strlcpy(componentName, core[index].name,nameLen);
