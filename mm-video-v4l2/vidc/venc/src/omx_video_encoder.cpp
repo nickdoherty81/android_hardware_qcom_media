@@ -2431,6 +2431,8 @@ OMX_ERRORTYPE  omx_venc::component_deinit(OMX_IN OMX_HANDLETYPE hComp)
         for (i=0; i<m_sInPortDef.nBufferCountActual; i++ ) {
             if (BITMASK_PRESENT(&m_inp_bm_count, i)) {
                 BITMASK_CLEAR(&m_inp_bm_count, i);
+                if (BITMASK_PRESENT(&m_client_in_bm_count, i))
+                    BITMASK_CLEAR(&m_client_in_bm_count, i);
                 free_input_buffer (&m_inp_mem_ptr[i]);
             }
 
@@ -2497,6 +2499,11 @@ OMX_U32 omx_venc::dev_start_done(void)
 OMX_U32 omx_venc::dev_set_message_thread_id(pthread_t tid)
 {
     return handle->venc_set_message_thread_id(tid);
+}
+
+bool omx_venc::dev_handle_empty_eos_buffer(void)
+{
+    return true;
 }
 
 bool omx_venc::dev_use_buf(void *buf_addr,unsigned port,unsigned index)

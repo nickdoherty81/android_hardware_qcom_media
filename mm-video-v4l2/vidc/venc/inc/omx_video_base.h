@@ -237,6 +237,7 @@ class omx_video: public qc_omx_component
         virtual OMX_U32 dev_resume(void) = 0;
         virtual OMX_U32 dev_start_done(void) = 0;
         virtual OMX_U32 dev_set_message_thread_id(pthread_t) = 0;
+        virtual bool dev_handle_empty_eos_buffer(void) = 0;
         virtual bool dev_use_buf(void *,unsigned,unsigned) = 0;
         virtual bool dev_free_buf(void *,unsigned) = 0;
         virtual bool dev_empty_buf(void *, void *,unsigned,unsigned) = 0;
@@ -706,6 +707,7 @@ class omx_video: public qc_omx_component
 
         uint64_t m_out_bm_count;
         uint64_t m_client_out_bm_count;
+        uint64_t m_client_in_bm_count;
         uint64_t m_inp_bm_count;
         uint64_t m_flags;
         uint64_t m_etb_count;
@@ -718,6 +720,7 @@ class omx_video: public qc_omx_component
         bool hw_overload;
         size_t m_graphicbuffer_size;
         char m_platform[OMX_MAX_STRINGNAME_SIZE];
+		bool m_buffer_freed;
 };
 
 #endif // __OMX_VIDEO_BASE_H__
